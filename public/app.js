@@ -88,8 +88,9 @@ function fillReturnOptions() {
 function renderSrcBar() {
   const s = STATUS.status;
   const label = { amap: '路径规划', llm: 'AI 小助手', train: '车次', hotel: '酒店' };
+  const txt = { live: '实时', '12306': '12306 实时', rule: '本地规则', snapshot: '快照', mock: '估算' };
   $('#srcbar').innerHTML = Object.entries(s).map(([k, v]) =>
-    `<span class="src ${v}"><span class="dot"></span>${label[k]}：${v === 'live' ? '实时' : v === 'rule' ? '本地规则' : '快照'}</span>`
+    `<span class="src ${v}"><span class="dot"></span>${label[k]}：${txt[v] || v}</span>`
   ).join('');
   $('#chatMode').textContent = s.llm === 'live' ? '大模型模式' : '本地规则模式';
 }
@@ -164,7 +165,16 @@ function renderTrip() {
         <div class="t">${esc(d.dayTemp || '')}° / ${esc(d.nightTemp || '')}°</div>
       </div>`).join('')}</div>` : '';
 
+  const dynamicNote = m.dynamic ? `
+    <div class="notice" style="max-width:none">
+      <span>🛠</span>
+      <div>这个城市还没有人工维护的景点库，景点由<b>高德真实 POI 动态生成</b>——名称、地址是真的，
+      但开放时间、停止入园、游玩时长用的是<b>默认值</b>，也没有网友避坑数据。
+      想要更准的行程，可以在 <code>server/data/pois.js</code> 里补充该城市（欢迎提 PR）。</div>
+    </div>` : '';
+
   $('#tripBox').innerHTML = `
+    ${dynamicNote}
     <div class="sec-head"><h2>这次去哪儿</h2><span class="sub">${esc(m.province || '')} · ${esc(m.intro || '')}</span></div>
     <div class="overview">${ov.map(([k, v]) => `<div class="ov"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     ${conflicts}
@@ -176,38 +186,54 @@ function renderTrip() {
 
 /* ==================== 车票 ==================== */
 
+function seatsTxt(n) {
+  if (n === -1) return '有票';
+  if (n === 0) return '无票';
+  return `${n} 张`;
+}
+
 function trainRow(t) {
   const isRec = t.recommend;
+  const p2 = t.price2 == null ? '待核验' : `¥${t.price2}`;
+  const p1 = t.price1 == null ? '待核验' : `¥${t.price1}`;
   return `
     <div class="train ${isRec ? 'rec' : ''}">
       <div class="no">${esc(t.no)}</div>
       <div class="tm">${esc(t.dep)}<i>→</i>${esc(t.arr)}</div>
       <div class="dur">${esc(t.durMin)} 分钟</div>
-      <div class="pr">¥${t.price2}<small> 二等座</small></div>
-      <div class="pr" style="color:var(--ink-3);font-size:13px">¥${t.price1}<small> 一等</small></div>
+      <div class="pr"${t.price2 == null ? ' style="color:var(--ink-3);font-size:14px"' : ''}>${p2}<small> 二等座</small></div>
+      <div class="pr" style="color:var(--ink-3);font-size:13px">${p1}<small> 一等</small></div>
       ${isRec ? '<span class="badge">推荐</span>' : ''}
-      <div class="seats">二等座余票参考 ${t.seats2} 张</div>
+      <div class="seats">二等座 ${seatsTxt(t.seats2)}${t.seats2 === 0 ? '（可候补）' : ''}</div>
       <div class="note">${esc(t.note || '')}</div>
     </div>`;
+}
+
+function srcNote(t) {
+  if (t.source === '12306') return `· 12306 实时余票 · 查询于 ${esc(String(t.queriedAt || '').slice(11, 16))}`;
+  if (t.live) return '· 实时接口';
+  return '· 参考快照，需在 12306 核验';
 }
 
 function renderTicket() {
   const o = PLAN.trains.outbound, b = PLAN.trains.inbound;
   const alert = b.alert ? `<div class="alertbox"><h3>⚠️ ${esc(b.alert.title)}</h3><p>${esc(b.alert.detail)}</p></div>` : '';
   const chosen = PLAN.trains.chosen;
+  const degraded = [o, b].filter((x) => x.degraded);
 
   $('#ticketBox').innerHTML = `
-    <div class="sec-head"><h2>去程 · ${esc(o.from)} → ${esc(o.to)}</h2><span class="sub">${esc(o.date)}${o.live ? '' : ' · 快照数据，需在 12306 核验'}</span></div>
+    ${degraded.length ? `<div class="conflict"><h4>⚠️ 实时查询失败，已回落到参考快照</h4><p>${esc(degraded[0].error || '')}　数据可能不准，请以 12306 为准。</p></div>` : ''}
+    <div class="sec-head"><h2>去程 · ${esc(o.from)} → ${esc(o.to)}</h2><span class="sub">${esc(o.date)} ${srcNote(o)}</span></div>
     <div style="display:grid;gap:10px">${(o.list || []).map(trainRow).join('')}</div>
 
-    <div class="sec-head"><h2>返程 · ${esc(b.from)} → ${esc(b.to)}</h2><span class="sub">引擎已选 ${esc(chosen.return ? chosen.return.no : '—')}</span></div>
+    <div class="sec-head"><h2>返程 · ${esc(b.from)} → ${esc(b.to)}</h2><span class="sub">引擎已选 ${esc(chosen.return ? chosen.return.no : '—')} ${srcNote(b)}</span></div>
     ${alert}
     <div style="display:grid;gap:10px">${(b.list || []).map(trainRow).join('')}</div>
 
     <div class="notice" style="max-width:none;margin-top:20px">
       <span>🔗</span>
-      <div>票价与余票会实时变动，点任意卡片下方「去 12306 核验余票」跳转官方。
-      <b>热门班次建议提前订</b>——城际线路临近发车常出现无座。</div>
+      <div>余票实时变动，<b>热门班次建议提前订</b>——城际线路临近发车常出现无座。
+      标「待核验」的票价是因为限速保护没逐个查询，点开 12306 即可确认。</div>
     </div>`;
 }
 

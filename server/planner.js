@@ -61,10 +61,56 @@ const BUFFER = {
  * @param {string} [opts.returnNo]   指定返程车次
  * @param {boolean} [opts.includeOptional] 是否纳入 optional 景点
  */
+/**
+ * 动态构建城市：景点库里没有的城市，用高德 POI 真实景点现搭一个。
+ * 代价是缺失精细约束（开放时间、停止入园、网友避坑），只能给默认值——
+ * 前端会如实标注「动态生成」。精品人工库仍然优先。
+ */
+async function buildDynamicCity(name) {
+  let raw = [];
+  try {
+    raw = await providers.searchPOI({ keywords: `${name} 风景名胜`, city: name, types: '风景名胜' });
+  } catch (e) {
+    return null;
+  }
+  if (!raw || raw.length < 2) return null;
+
+  return {
+    city: name,
+    province: '',
+    intro: '景点由高德 POI 动态生成，约束为默认值。',
+    railStation: `${name}站`,
+    hotelAreas: [],
+    dynamic: true,
+    zoneMatrix: {}, // 留空 → 让 transitBetween 走高德真实路径规划
+    cityRules: [],
+    pois: raw.slice(0, 12).map((p, i) => ({
+      id: `poi_${i}_${p.name}`,
+      name: p.name,
+      zone: '市区',
+      address: p.address || '',
+      durationMin: 90,
+      priority: 8 - Math.floor(i / 3), // 高德返回顺序本身带一定相关性
+      ticket: { price: 0 },
+      hours: { open: '09:00', close: '17:00', lastEntry: '16:00' },
+      tips: [p.type ? `类型：${p.type}` : ''].filter(Boolean),
+      pitfalls: [],
+    })),
+  };
+}
+
 async function buildPlan(opts) {
-  const city = getCity(opts.city);
+  let city = getCity(opts.city);
+  let dynamic = false;
+
   if (!city) {
-    return { error: `暂不支持城市「${opts.city}」。可在 server/data/pois.js 中添加该城市的景点库，欢迎提 PR。` };
+    city = await buildDynamicCity(opts.city);
+    if (!city) {
+      return {
+        error: `暂不支持城市「${opts.city}」。两条路可以解决：① 在 .env 配置 AMAP_KEY，系统会用高德真实 POI 动态生成行程；② 在 server/data/pois.js 里补充该城市的景点库（欢迎提 PR）。`,
+      };
+    }
+    dynamic = true;
   }
 
   const days = Number(opts.days || 2);
@@ -74,7 +120,7 @@ async function buildPlan(opts) {
   const outData = await providers.searchTrains({ from: `${fromCity}西`, to: opts.city, date: opts.date });
   const backData = await providers.searchTrains({ from: opts.city, to: `${fromCity}西`, date: opts.date });
 
-  const outbound = pickTrain(outData, opts.outboundNo);
+  const outbound = pickTrain(outData, opts.outboundNo, days);
   if (!outbound.train) {
     return {
       error: `没有查到 ${fromCity} → ${opts.city} 的车次。${outData.message || ''}`,
@@ -144,7 +190,8 @@ async function buildPlan(opts) {
     startMin: arriveMin,
     startZone: '市区',
     endMin: dayEndMin,
-    includeOptional: false, // 要赶车的那天不排可选点
+    // 交给引擎自己取舍：时间够就排进去，不够会被硬约束砍掉（并在「引擎帮你砍掉的」里说明原因）
+    includeOptional: true,
     usedPoiIds, skipped, cityName: opts.city,
     hotelFirst: false,
     transfer,
@@ -153,6 +200,10 @@ async function buildPlan(opts) {
   /* --- 5. 返程倒推（核心） --- */
   const returnPick = pickReturn(backData, d2.cursor, opts.returnNo, preferredNo);
   const train = returnPick.train;
+
+  // 被选中的班次必须有票价——列表里靠后的班次因限速没查价，这里补上
+  await providers.fillTrainPrice(outbound.train, opts.date);
+  if (train) await providers.fillTrainPrice(train, opts.date);
 
   const returnChain = train ? buildReturnChain(train, d2.cursor, transfer) : null;
   if (returnChain) {
@@ -187,6 +238,7 @@ async function buildPlan(opts) {
       dateEnd: days >= 2 ? nextDate(opts.date) : opts.date,
       days, nights: days - 1,
       generatedAt: nowStr(),
+      dynamic, // true 表示景点是 POI 动态生成的，不是人工维护的精品库
       dataStatus: providers.status(),
     },
     trains: { outbound: outData, inbound: backData, chosen: { outbound: outbound.train, return: train } },
@@ -205,7 +257,13 @@ async function buildPlan(opts) {
 
 /* -------------------- 车次选择 -------------------- */
 
-function pickTrain(data, wantedNo) {
+/**
+ * 选去程班次。
+ * 快照里带 recommend 标记就直接用它；实时数据没有这个标记，
+ * 就按「多日行程挑上午出发的、当日往返挑最早的」来选 —— 最早一班往往是 6 点，
+ * 直接选它只会让人起不来。
+ */
+function pickTrain(data, wantedNo, days) {
   const list = data.list || [];
   if (!list.length) return { train: null };
   if (wantedNo) {
@@ -213,7 +271,16 @@ function pickTrain(data, wantedNo) {
     if (hit) return { train: hit };
   }
   const rec = list.find((t) => t.recommend);
-  return { train: rec || list[0] };
+  if (rec) return { train: rec };
+
+  if (days > 1) {
+    // 8 点之后出发：6、7 点的车能赶但人起不来，不把它当默认
+    const morning = list.filter((t) => toMin(t.dep) >= 8 * 60 && toMin(t.dep) <= 10 * 60 + 30);
+    if (morning.length) return { train: morning[0] };
+    const after8 = list.filter((t) => toMin(t.dep) >= 8 * 60);
+    if (after8.length) return { train: after8[0] };
+  }
+  return { train: list[0] };
 }
 
 /**
@@ -234,9 +301,12 @@ function pickReturn(data, endMin, wantedNo, preferredNo) {
     const p = list.find((t) => t.no === preferredNo);
     if (p && toMin(p.dep) - needMin >= endMin) return { train: p };
   }
-  const feasible = list.find((t) => toMin(t.dep) - needMin >= endMin);
+  // 默认选「来得及的最晚一班」：出来玩的人通常想玩够，而不是赶最早的车回家。
+  // 但不超过 20:00——再晚就不是游玩而是受罪了。想早走可以在界面上改。
+  const feasible = list.filter((t) => toMin(t.dep) - needMin >= endMin && toMin(t.dep) <= 20 * 60);
+  if (feasible.length) return { train: feasible[feasible.length - 1] };
   // 实在来不及就坐当天最晚一班，并由调用方给出冲突提示
-  return { train: feasible || list[list.length - 1] };
+  return { train: list[list.length - 1] };
 }
 
 /* -------------------- 去程链 -------------------- */
@@ -424,8 +494,10 @@ async function scheduleDay({
     cursor += 15;
   }
 
+  let prevName = null; // 上一个落脚点的具体名称，用于调真实路径规划
+
   for (const poi of deduped) {
-    const t = await transitBetween(city, cityName, zone, poi.zone);
+    const t = await transitBetween(city, cityName, zone, poi.zone, prevName, poi.name);
     const arrive = cursor + t.durationMin;
 
     // 硬约束 1：停止入园
@@ -475,13 +547,14 @@ async function scheduleDay({
 
     cursor = arrive + poi.durationMin;
     zone = poi.zone;
+    prevName = poi.name;
     usedPoiIds.add(poi.id);
   }
 
   // 收尾：从景区回到市区。
   // 只有当天真的出过城才需要这个节点 —— 纯市区日不该出现「回到市区」，更不该标红。
   if (zone !== '市区') {
-    const t = await transitBetween(city, cityName, zone, '市区');
+    const t = await transitBetween(city, cityName, zone, '市区', prevName, '市区');
     nodes.push({
       time: toStr(cursor), icon: 'car', type: 'move',
       title: `${zone} → 市区`,
@@ -508,11 +581,16 @@ async function scheduleDay({
 
 const transitCache = new Map();
 
-async function transitBetween(city, cityName, fromZone, toZone) {
-  if (fromZone === toZone) {
-    return { durationMin: toZone === '防川' ? 15 : 12, mode: toZone === '防川' ? '景区观光车' : '打车', cost: '', note: '' };
+async function transitBetween(city, cityName, fromZone, toZone, fromName, toName) {
+  // 人工维护的城市库有片区矩阵：同片区短驳直接给经验值，快且不耗接口
+  if (fromZone === toZone && !city.dynamic) {
+    const r = toZone === '防川'
+      ? { durationMin: 15, mode: '景区观光车', cost: '7 元（必买）', note: '核心景点间距超 3 km，禁止步行' }
+      : { durationMin: 12, mode: '打车', cost: '起步价 5 元', note: '' };
+    return r;
   }
-  const key = `${cityName}|${fromZone}>${toZone}`;
+
+  const key = `${cityName}|${fromZone}>${toZone}|${fromName || ''}>${toName || ''}`;
   if (transitCache.has(key)) return transitCache.get(key);
 
   const matrix = city.zoneMatrix || {};
@@ -522,8 +600,14 @@ async function transitBetween(city, cityName, fromZone, toZone) {
     transitCache.set(key, r);
     return r;
   }
-  // matrix 没覆盖 → 交给 provider（可能走高德真实规划）
-  const r = await providers.route({ city: cityName, fromZone, toZone, origin: fromZone, destination: toZone });
+
+  // 矩阵没覆盖（动态城市基本都是这种情况）→ 交给 provider，配了高德就是真实路径规划
+  const r = await providers.route({
+    city: cityName,
+    fromZone, toZone,
+    origin: fromName || fromZone,
+    destination: toName || toZone,
+  });
   transitCache.set(key, r);
   return r;
 }

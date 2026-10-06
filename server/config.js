@@ -49,6 +49,13 @@ const config = {
   },
 
   train: {
+    /**
+     * 数据源选择：
+     *   12306    —— 调 12306 官方公开查询接口，拿真实余票与票价（默认）
+     *   custom   —— 你自己实现的接口，需在 TRAIN_API_BASE 配置
+     *   snapshot —— 完全不联网，只用内置真实采集快照
+     */
+    provider: process.env.TRAIN_PROVIDER || '12306',
     base: process.env.TRAIN_API_BASE || '',
     key: process.env.TRAIN_API_KEY || '',
   },

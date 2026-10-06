@@ -10,6 +10,7 @@ const config = require('../config');
 const mock = require('./mock');
 const amap = require('./amap');
 const llm = require('./llm');
+const t12306 = require('./train12306');
 
 const TIMEOUT_MS = 8000;
 
@@ -26,6 +27,7 @@ function degrade(base, err) {
  * 不符合约定或调用失败则降级到内置快照。
  */
 async function searchTrains({ from, to, date }) {
+  // 1) 用户自备接口优先
   if (config.train.base) {
     try {
       const url = new URL(config.train.base);
@@ -43,7 +45,36 @@ async function searchTrains({ from, to, date }) {
       return degrade(await mock.searchTrains({ from, to, date }), err);
     }
   }
+
+  // 2) 12306 官方公开查询接口 —— 真实余票与票价
+  if (config.train.provider === '12306') {
+    if (!t12306.dateInRange(date)) {
+      const snap = await mock.searchTrains({ from, to, date });
+      return {
+        ...snap,
+        outOfRange: true,
+        message: `12306 通常只售 15 天内的车票，${date} 不在售票窗口内，已回落到参考快照。`,
+      };
+    }
+    try {
+      return await t12306.query({ from, to, date });
+    } catch (err) {
+      return degrade(await mock.searchTrains({ from, to, date }), err);
+    }
+  }
+
+  // 3) 内置快照
   return mock.searchTrains({ from, to, date });
+}
+
+/** 补查被选中班次的票价（列表里靠后的班次因限速没查价） */
+async function fillTrainPrice(train, date) {
+  if (!train || train.price2 != null) return train;
+  try {
+    return await t12306.fillPrice(train, date);
+  } catch (e) {
+    return train;
+  }
 }
 
 /* ---------------- 酒店 ---------------- */
@@ -144,13 +175,14 @@ function status() {
   return {
     amap: amap.enabled() ? 'live' : 'mock',
     llm: llm.enabled() ? 'live' : 'rule',
-    train: config.train.base ? 'live' : 'snapshot',
+    train: config.train.base ? 'live' : (config.train.provider === '12306' ? '12306' : 'snapshot'),
     hotel: config.hotel.base ? 'live' : 'snapshot',
   };
 }
 
 module.exports = {
   searchTrains,
+  fillTrainPrice,
   searchHotels,
   getStationTransfer,
   route,
