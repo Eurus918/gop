@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>随行 GoP · P 人的分钟级出行搭子</title>
+<meta name="description" content="一句话说出目的地，产出可执行的车票、酒店、分钟级路线与网友避坑。">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="logo-row">
+      <div class="dot">🐣</div>
+      <b>随行 GoP</b>
+      <span>P 人专属</span>
+    </div>
+    <h1>一句话说出目的地，<br><em>剩下的时间我替你算</em></h1>
+    <p>车票 · 酒店 · 分钟级路线 · 网友避坑，一次给齐。<br>改任意一个参数，全链路自动重排。</p>
+
+    <!-- 参数控制条：改任意一个都会触发服务端重算 -->
+    <div class="ctrl">
+      <div class="f">
+        <label>出发地</label>
+        <input id="fFrom" value="延吉" style="width:86px">
+      </div>
+      <div class="f">
+        <label>目的地</label>
+        <select id="fCity"></select>
+      </div>
+      <div class="f">
+        <label>出发日期</label>
+        <input id="fDate" type="date">
+      </div>
+      <div class="f">
+        <label>天数</label>
+        <select id="fDays">
+          <option value="1">当天往返</option>
+          <option value="2" selected>2 天 1 晚</option>
+        </select>
+      </div>
+      <div class="f">
+        <label>返程班次</label>
+        <select id="fReturn"></select>
+      </div>
+      <button class="recalc" id="fGo">重新排程 →</button>
+    </div>
+
+    <div class="srcbar" id="srcbar"></div>
+
+    <div class="notice">
+      <span>📌</span>
+      <div>
+        <b>关于数据：</b>车次、票价、余票来自公开车次页的<b>真实快照</b>（并非实时接口——铁路 12306 没有官方开放 API）。
+        票价与余票实时变动，每张票都带「去 12306 核验」跳转，请以官方为准。
+        配置 <b>AMAP_KEY</b> 后，路径规划与天气会切换为高德实时数据。详见页面底部与 README。
+      </div>
+    </div>
+  </header>
+</div>
+
+<nav class="tabs">
+  <div class="tabs-in">
+    <button class="tab on" data-tab="trip">🗺 行程时间轴</button>
+    <button class="tab" data-tab="ticket">🎫 车票</button>
+    <button class="tab" data-tab="hotel">🏨 酒店 &amp; 接站</button>
+    <button class="tab" data-tab="pit">⚠️ 避坑 &amp; 红线</button>
+    <button class="tab" data-tab="pack">🎒 准备清单</button>
+    <button class="tab" data-tab="budget">💰 预算 &amp; 架构</button>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div id="boot" class="loading"><div class="spin"></div>正在排程…</div>
+
+  <section class="panel on" id="trip">
+    <div id="tripBox"></div>
+  </section>
+
+  <section class="panel" id="ticket"><div id="ticketBox"></div></section>
+  <section class="panel" id="hotel"><div id="hotelBox"></div></section>
+  <section class="panel" id="pit"><div id="pitBox"></div></section>
+  <section class="panel" id="pack"><div id="packBox"></div></section>
+  <section class="panel" id="budget"><div id="budgetBox"></div></section>
+
+  <div class="foot">
+    <b>随行 GoP</b> · 开源旅行规划助手<br>
+    排程引擎 / 可插拔数据源 / 本地规则 + LLM 双模小助手<br>
+    示例城市：珲春 · 欢迎提 PR 补充你的城市
+  </div>
+</div>
+
+<button class="buddy" id="buddyBtn" title="问小P">
+  <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="bg" cx="34%" cy="28%">
+        <stop offset="0%" stop-color="#b6f7ec"/>
+        <stop offset="55%" stop-color="#7fd8ff"/>
+        <stop offset="100%" stop-color="#c0a8ff"/>
+      </radialGradient>
+    </defs>
+    <path d="M20 7 q2.5 -5 6 -3.5" stroke="#7fd8ff" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <circle cx="20" cy="21" r="15.5" fill="url(#bg)"/>
+    <ellipse cx="13.5" cy="16" rx="4.2" ry="3" fill="rgba(255,255,255,.6)"/>
+    <path d="M12.5 19.5 q3 -3.2 6 0" stroke="#2b3445" stroke-width="2.1" fill="none" stroke-linecap="round"/>
+    <path d="M21.5 19.5 q3 -3.2 6 0" stroke="#2b3445" stroke-width="2.1" fill="none" stroke-linecap="round"/>
+    <ellipse cx="11" cy="24" rx="2.7" ry="1.8" fill="#ff9fb8" opacity=".8"/>
+    <ellipse cx="29" cy="24" rx="2.7" ry="1.8" fill="#ff9fb8" opacity=".8"/>
+    <path d="M16.5 26 q3.5 3.6 7 0" stroke="#2b3445" stroke-width="2.1" fill="none" stroke-linecap="round"/>
+  </svg>
+</button>
+
+<div class="chat" id="chat">
+  <div class="hd">
+    <div class="av">🐣</div>
+    <div><b>小P</b><small id="chatMode">你的随行搭子</small></div>
+    <button class="x" id="chatClose">×</button>
+  </div>
+  <div class="bd" id="chatBody"></div>
+  <div class="sugg" id="sugg"></div>
+  <div class="ft">
+    <input id="chatInput" placeholder="问点什么，比如「赶车来得及吗」">
+    <button id="chatSend">↑</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

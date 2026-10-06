@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+
+# 环境变量（含 API Key，绝对不能提交）
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+logs/
+npm-debug.log*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 运行时缓存
+.cache/
+.tmp/
+coverage/

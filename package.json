@@ -1,0 +1,31 @@
+{
+  "name": "gop",
+  "version": "0.1.0",
+  "description": "随行 GoP · 面向 P 人的分钟级出行规划助手：一句话说出目的地，产出可执行的车票、酒店、分钟级路线与网友避坑。",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "travel",
+    "itinerary",
+    "planner",
+    "ai",
+    "trip",
+    "分钟级行程",
+    "旅行规划"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Eurus918/gop.git"
+  }
+}
